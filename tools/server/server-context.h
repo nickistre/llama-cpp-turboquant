@@ -96,6 +96,12 @@ struct server_context {
     // terminate main loop (will unblock start_loop)
     void terminate();
 
+    // auto-save/restore slot state across process restarts (model hot-swap
+    // or host reboot). requires --slot-save-path; no-op otherwise. skipped
+    // for multimodal models. see server-context.cpp for details.
+    void auto_save_slots();
+    void auto_restore_slots();
+
     // get the underlaying llama_context, can return nullptr if sleeping
     // not thread-safe, should only be used from the main thread
     llama_context * get_llama_context() const;
