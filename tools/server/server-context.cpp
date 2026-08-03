@@ -2752,6 +2752,94 @@ private:
         return true;
     }
 
+    // auto-save/restore slot state across process restarts (e.g. llama-swap
+    // hot-swapping this model out for another, or a host reboot), so a
+    // returning conversation doesn't force a full prompt re-prefill.
+    // requires --slot-save-path to be set; no-op otherwise.
+    //
+    // skipped for multimodal models (mctx != nullptr): llama_state_seq_save/
+    // load_file() does not capture the mtmd (vision) encoder's image-token
+    // KV state, the same reason /slots save/restore is blocked for these
+    // models via check_slot_no_media() - bypassing that guard here would
+    // risk restoring a slot that silently desyncs from what was actually
+    // decoded.
+    void auto_save_slots() {
+        if (params_base.slot_save_path.empty() || mctx) {
+            return;
+        }
+
+        const std::string model_stem = std::filesystem::path(params_base.model.path).stem().string();
+        const std::string filepath   = params_base.slot_save_path + model_stem;
+
+        for (auto & slot : slots) {
+            const llama_tokens tokens = slot.prompt.tokens.get_text_tokens();
+            const size_t token_count  = tokens.size();
+            if (token_count == 0) {
+                continue;
+            }
+
+            const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot.id, tokens.data(), token_count);
+
+            if (!slot.prompt.checkpoints.empty()) {
+                if (checkpoints_save_sidecar(slot.prompt.checkpoints, filepath + ".ckpt")) {
+                    SRV_INF("auto-save: wrote %zu context checkpoints for slot %d\n", slot.prompt.checkpoints.size(), slot.id);
+                } else {
+                    SRV_WRN("auto-save: failed to write checkpoint sidecar for slot %d\n", slot.id);
+                }
+            }
+
+            SRV_INF("auto-saved slot %d (%zu tokens, %.1f MiB) to %s\n",
+                slot.id, token_count, (float) nwrite / (1024.0f * 1024.0f), filepath.c_str());
+        }
+    }
+
+    void auto_restore_slots() {
+        if (params_base.slot_save_path.empty() || mctx) {
+            return;
+        }
+
+        const std::string model_stem = std::filesystem::path(params_base.model.path).stem().string();
+        const std::string filepath   = params_base.slot_save_path + model_stem;
+
+        if (!std::filesystem::exists(filepath)) {
+            return;
+        }
+
+        for (auto & slot : slots) {
+            llama_tokens tokens;
+            tokens.resize(slot.n_ctx);
+            size_t token_count = 0;
+            const size_t nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot.id, tokens.data(), tokens.size(), &token_count);
+
+            if (nread == 0) {
+                SRV_WRN("auto-restore failed for slot %d from %s\n", slot.id, filepath.c_str());
+                continue;
+            }
+
+            tokens.resize(token_count);
+            slot.prompt.tokens.clear();
+            slot.prompt.tokens.insert(tokens);
+
+            // see the SERVER_TASK_TYPE_SLOT_RESTORE handler above for why:
+            // reload the sidecar checkpoints, or synthesize a tip checkpoint
+            // from the just-restored state if no sidecar exists.
+            if (params_base.n_ctx_checkpoints > 0 && token_count > 0) {
+                if (checkpoints_load_sidecar(slot.prompt.checkpoints, filepath + ".ckpt")) {
+                    SRV_INF("auto-restore: loaded %zu context checkpoints for slot %d\n", slot.prompt.checkpoints.size(), slot.id);
+                } else {
+                    const llama_pos p_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
+                    const llama_pos p_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+                    if (p_min >= 0 && p_max >= p_min) {
+                        create_checkpoint(slot, 0, p_min, p_max);
+                    }
+                }
+            }
+
+            SRV_INF("auto-restored slot %d (%zu tokens, %.1f MiB) from %s\n",
+                slot.id, token_count, (float) nread / (1024.0f * 1024.0f), filepath.c_str());
+        }
+    }
+
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         const int id_task = slot.task->id;
@@ -4464,6 +4552,14 @@ void server_context::start_loop() {
 
 void server_context::terminate() {
     impl->queue_tasks.terminate();
+}
+
+void server_context::auto_save_slots() {
+    impl->auto_save_slots();
+}
+
+void server_context::auto_restore_slots() {
+    impl->auto_restore_slots();
 }
 
 llama_context * server_context::get_llama_context() const {
