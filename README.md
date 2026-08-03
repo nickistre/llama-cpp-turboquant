@@ -16,6 +16,30 @@
 
 </div>
 
+## About this branch
+
+`turboquant-fable5-optimized` combines the following on top of upstream `ggml-org/llama.cpp`,
+to serve as the standard build for internal deployments (`home-kubernetes/llamacpp`,
+`llamacpp-amd`):
+
+1. **Base: TurboQuant** - [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)
+   (`feature/turboquant-kv-cache`). Tracks upstream closely and adds the turbo3/turbo4 KV-cache
+   quantization types, Vulkan/ROCm support, and multimodal `llama-server`.
+2. **Fable 5 MoE prefill optimizations** - four commits cherry-picked from
+   [thecodacus/llama.cpp](https://github.com/thecodacus/llama.cpp/tree/fable5/prefetch-experts)
+   (`fable5/prefetch-experts`): mmap-backed CPU weight pinning, overlapping expert weight
+   uploads with compute, and per-layer prefetch slot sizing. See
+   "This fork - Fable's MoE-offload prefill optimizations" below for details and benchmarks.
+3. **Auto-save/restore slot state** (`server: auto-save/restore slot state on process
+   exit/start`) - adapted from the auto-save/restore commit in
+   [European-tech's PR #20822](https://github.com/ggml-org/llama.cpp/pull/20822) (open,
+   unmerged upstream). Retargeted to call this fork's native checkpoint-sidecar mechanism
+   (`checkpoints_save_sidecar`/`checkpoints_load_sidecar`) instead of the PR's own, since
+   TurboQuant already has equivalent checkpoint persistence. Saves each slot's KV state +
+   context checkpoints to `--slot-save-path` on process exit and restores them on the next
+   load of the same model, so a router-mode model hot-swap (or host restart) doesn't force a
+   full prompt re-prefill. Skipped for multimodal models, same as the existing `/slots` guard.
+
 ## This fork - Fable's MoE-offload prefill optimizations
 
 Two **opt-in** optimizations for large MoE models whose experts are offloaded to system RAM
