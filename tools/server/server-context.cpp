@@ -249,9 +249,10 @@ struct server_slot {
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
-    // A restored checkpoint leaves a short prompt suffix to evaluate. Keep that
-    // suffix out of mixed decode batches; the CUDA path is not stable when it is
-    // evaluated concurrently with other active slots.
+    // A restored checkpoint leaves a prompt suffix to evaluate. Keep that
+    // suffix out of mixed decode batches (isolation from other active slots is
+    // provided by has_checkpoint_restored_prompt); it is still processed in
+    // normal ubatch-sized chunks rather than one token at a time.
     bool prompt_checkpoint_restored = false;
 
     stop_type stop;
@@ -3791,10 +3792,11 @@ private:
                             }
                         }
 
-                        // a restored checkpoint leaves a short prompt suffix to evaluate; keep it
-                        // in small batches (the CUDA path is not stable when it is evaluated
-                        // concurrently with other active slots)
-                        if (slot.prompt_checkpoint_restored) {
+                        // a restored checkpoint leaves a prompt suffix to evaluate; process it in
+                        // small (ubatch-sized) chunks rather than one token at a time -- isolation
+                        // from other active slots is already provided by has_checkpoint_restored_prompt.
+                        if (slot.prompt_checkpoint_restored &&
+                            batch.size() - n_tokens_prev >= n_ubatch) {
                             break;
                         }
                     }
