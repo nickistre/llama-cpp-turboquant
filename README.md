@@ -16,6 +16,49 @@
 
 </div>
 
+## About this branch
+
+`turboquant-custom` combines the following on top of upstream `ggml-org/llama.cpp`,
+to serve as the standard build for internal deployments (`home-kubernetes/llamacpp`,
+`llamacpp-amd`):
+
+1. **Base: TurboQuant** - [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)
+   (`feature/turboquant-kv-cache`). Tracks upstream closely and adds the turbo3/turbo4 KV-cache
+   quantization types, Vulkan/ROCm support, multimodal `llama-server`, and (as of the
+   2026-08-21 rebase) an opt-in `--moe-cache` expert cache for CPU-offloaded MoE models —
+   see `docs/backend/MOE-CACHE.md`.
+2. **Auto-save/restore slot state** (`server: auto-save/restore slot state on process
+   exit/start`) - adapted from the auto-save/restore commit in
+   [European-tech's PR #20822](https://github.com/ggml-org/llama.cpp/pull/20822) (open,
+   unmerged upstream). Retargeted to call this fork's native checkpoint-sidecar mechanism
+   (`checkpoints_save_sidecar`/`checkpoints_load_sidecar`) instead of the PR's own, since
+   TurboQuant already has equivalent checkpoint persistence. Saves each slot's KV state +
+   context checkpoints to `--slot-save-path` on process exit and restores them on the next
+   load of the same model, so a router-mode model hot-swap (or host restart) doesn't force a
+   full prompt re-prefill. Skipped for multimodal models, same as the existing `/slots` guard.
+
+### History: renamed from `turboquant-fable5-optimized` (2026-08-21)
+
+This branch was previously `turboquant-fable5-optimized` and additionally carried four
+cherry-picked commits from
+[thecodacus/llama.cpp](https://github.com/thecodacus/llama.cpp/tree/fable5/prefetch-experts)
+("Fable 5" MoE prefill optimizations: mmap-backed CPU weight pinning, overlapping expert
+weight uploads with compute, per-layer prefetch slot sizing — opt-in via
+`GGML_CUDA_REGISTER_HOST`/`GGML_SCHED_PREFETCH_EXPERTS`) plus a local fix for
+restored-checkpoint batch sizing. Both were dropped in this rebase:
+
+- The Fable 5 patches were **never enabled in production** and, when benchmarked on an
+  RTX 2070 (`home-kubernetes/apps/llamacpp/docs/benchmarking.md` §10, 2026-08-04), showed
+  a prompt-processing regression (qwen3.6-35b-a3b −6.5%, ornith-1.0-35b flat/−1.3%) and a
+  fixed ~418 MiB VRAM tax with no offsetting decode gain. CUDA-only, so inert on the
+  Vulkan/RADV deployment as well. Removed rather than carried forward through the rebase.
+- The local restored-checkpoint batching fix (`server: batch restored-checkpoint suffix
+  by n_ubatch, not one token at a time`) is superseded by the fork's own equivalent fix,
+  merged as PR #271 (`baptisterajaut/fix/checkpoint-restore-prefill-batching`).
+
+The old branch head is retained as `archive/fable5-2026-08-21` for reproducibility of
+images built against it.
+
 ## Quick start
 
 A few options to get `llama.cpp` installed on your machine:
