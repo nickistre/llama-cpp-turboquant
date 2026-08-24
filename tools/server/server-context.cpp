@@ -19,10 +19,12 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cinttypes>
 #include <exception>
 #include <memory>
 #include <filesystem>
+#include <system_error>
 #include <utility>
 #include <fstream>
 
@@ -2703,7 +2705,42 @@ private:
         return ok;
     }
 
+    // default 8 GiB cap on the .ckpt sidecar read at restore time; a large
+    // sidecar (observed: 12.2 GiB / 15.7 GiB on this fleet) crashes
+    // auto_restore_slots() for reasons not yet root-caused (see
+    // docs/issues/qwen35-hybrid-recurrent-cache-checkpointing.md upstream).
+    // Rather than gate load(), degrade: skip the sidecar (falling back to
+    // the tip-checkpoint synthesis callers already do when no sidecar
+    // exists) instead of feeding it in and risking the crash. Override with
+    // LLAMA_CKPT_SIDECAR_MAX_MIB (0 = unlimited).
+    static uint64_t checkpoints_sidecar_max_bytes() {
+        static const uint64_t cached = [] () -> uint64_t {
+            const char * env = getenv("LLAMA_CKPT_SIDECAR_MAX_MIB");
+            uint64_t mib = 8192;
+            if (env != nullptr) {
+                char * end = nullptr;
+                const unsigned long long v = strtoull(env, &end, 10);
+                if (end != env) {
+                    mib = v;
+                }
+            }
+            return mib == 0 ? 0 : mib * 1024ull * 1024ull;
+        }();
+        return cached;
+    }
+
     static bool checkpoints_load_sidecar(std::list<common_prompt_checkpoint> & checkpoints, const std::string & filepath) {
+        std::error_code ec;
+        const uint64_t max_bytes = checkpoints_sidecar_max_bytes();
+        if (max_bytes > 0) {
+            const uint64_t sz = (uint64_t) std::filesystem::file_size(filepath, ec);
+            if (!ec && sz > max_bytes) {
+                SRV_WRN("checkpoint sidecar %s is %.1f MiB, over the %.1f MiB cap - skipping (restore will fall back to a single tip checkpoint)\n",
+                    filepath.c_str(), (double) sz / (1024.0 * 1024.0), (double) max_bytes / (1024.0 * 1024.0));
+                return false;
+            }
+        }
+
         FILE * f = fopen(filepath.c_str(), "rb");
         if (f == nullptr) {
             return false;
@@ -2757,21 +2794,39 @@ private:
     // returning conversation doesn't force a full prompt re-prefill.
     // requires --slot-save-path to be set; no-op otherwise.
     //
-    // skipped for multimodal models (mctx != nullptr): llama_state_seq_save/
-    // load_file() does not capture the mtmd (vision) encoder's image-token
-    // KV state, the same reason /slots save/restore is blocked for these
-    // models via check_slot_no_media() - bypassing that guard here would
-    // risk restoring a slot that silently desyncs from what was actually
-    // decoded.
+    // gated on slot *content*, not model capability - same rule
+    // check_slot_no_media() already applies to the manual /slots API: a
+    // multimodal model routinely holds pure-text slots, and those serialize
+    // fine via get_text_tokens(). only a slot that actually holds media is
+    // skipped, because get_text_tokens() strips the LLAMA_TOKEN_NULL media
+    // placeholders while llama_state_seq_save_file() records every KV cell
+    // - saving a media-holding slot would write a token list shorter than
+    // the state it describes, desyncing the two.
+    //
+    // the state file name is derived from the model path stem, which is NOT
+    // unique across llama-swap entries: a text-only entry and its `-vision`
+    // twin may deliberately share one on-disk GGUF (models.yaml's
+    // `model_dir`) while differing in --mmproj/--ctx-size. suffix with
+    // "-mtmd" whenever an mtmd context is loaded so the two never read or
+    // clobber each other's state file.
+    std::string auto_slot_state_path() const {
+        const std::string model_stem = std::filesystem::path(params_base.model.path).stem().string();
+        return params_base.slot_save_path + model_stem + (mctx ? "-mtmd" : "");
+    }
+
     void auto_save_slots() {
-        if (params_base.slot_save_path.empty() || mctx) {
+        if (params_base.slot_save_path.empty()) {
             return;
         }
 
-        const std::string model_stem = std::filesystem::path(params_base.model.path).stem().string();
-        const std::string filepath   = params_base.slot_save_path + model_stem;
+        const std::string filepath = auto_slot_state_path();
 
         for (auto & slot : slots) {
+            if (slot.prompt.tokens.has_media()) {
+                SRV_INF("auto-save: skipping slot %d (holds image/audio tokens)\n", slot.id);
+                continue;
+            }
+
             const llama_tokens tokens = slot.prompt.tokens.get_text_tokens();
             const size_t token_count  = tokens.size();
             if (token_count == 0) {
@@ -2793,13 +2848,17 @@ private:
         }
     }
 
+    // no media guard needed here: this runs once, right after model load,
+    // when every slot's prompt is empty, and the state-file format has no
+    // way to serialize mtmd (image/audio) chunks at all - a restored slot
+    // is text-only by construction (has_media() == false immediately
+    // after), so it's always safe to restore into a multimodal model's slot.
     void auto_restore_slots() {
-        if (params_base.slot_save_path.empty() || mctx) {
+        if (params_base.slot_save_path.empty()) {
             return;
         }
 
-        const std::string model_stem = std::filesystem::path(params_base.model.path).stem().string();
-        const std::string filepath   = params_base.slot_save_path + model_stem;
+        const std::string filepath = auto_slot_state_path();
 
         if (!std::filesystem::exists(filepath)) {
             return;
