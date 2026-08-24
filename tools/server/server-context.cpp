@@ -2901,7 +2901,17 @@ private:
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
-        const int id_task = slot.task->id;
+        // slot.task is null when this is called to synthesize a bootstrap
+        // "tip" checkpoint for a slot that was just restored (from
+        // auto_restore_slots() or the manual SERVER_TASK_TYPE_SLOT_RESTORE
+        // handler) and has not yet processed any task on this process's
+        // lifetime - dereferencing slot.task->id there is a guaranteed
+        // null-pointer crash (confirmed via gdb: SIGSEGV in this function,
+        // called from auto_restore_slots(), immediately after model load).
+        // -1 can't collide with a real task id (those start at 0), so the
+        // "was this checkpoint created by the current task" eviction logic
+        // below still behaves correctly for a synthesized checkpoint.
+        const int id_task = slot.task ? slot.task->id : -1;
 
         // evict checkpoints within min-step of a previous checkpoint, unless they were
         // created by the current task
