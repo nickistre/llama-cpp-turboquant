@@ -124,3 +124,30 @@ def test_prompt_cache_disk_shared():
     server.stop()
     files = disk_entries()
     assert len(files) == 1 and files != files_a
+
+
+def test_prompt_cache_disk_mtmd_text_only():
+    global server
+    # text-only prompts on a server with an mmproj loaded are written and restored like any other
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 1
+    server.slot_save_path = tempfile.mkdtemp()
+    server.cache_disk = -1
+    fd, server.log_path = tempfile.mkstemp(suffix='.log')
+    os.close(fd)
+    server.start()
+
+    n_a = complete(PROMPT_A)
+    n_b = complete(PROMPT_B)
+    assert n_a > 20 and n_b > 20
+
+    server.stop()
+    assert len(disk_entries()) == 2
+
+    # only the tail is processed (a few more tokens than tinyllama2, sliding window attention)
+    server.start()
+    assert complete(PROMPT_A) < n_a // 4
+    assert complete(PROMPT_B) < n_b // 4
+
+    with open(server.log_path) as f:
+        assert f.read().count("tokens from disk") >= 2

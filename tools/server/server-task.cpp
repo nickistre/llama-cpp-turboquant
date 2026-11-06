@@ -1677,8 +1677,9 @@ size_t server_prompt_cache::disk_size() const {
     return res;
 }
 
-// disk entries hold text tokens only; a media placeholder (LLAMA_TOKEN_NULL) never matches
-static size_t tokens_common_prefix(const llama_tokens & a, const llama_tokens & b) {
+// disk entries hold text tokens only; a media placeholder (LLAMA_TOKEN_NULL) never matches.
+// b is read by index, since get_tokens() asserts on any server with an mtmd context
+static size_t tokens_common_prefix(const llama_tokens & a, const server_tokens & b) {
     const size_t n = std::min(a.size(), b.size());
 
     for (size_t i = 0; i < n; ++i) {
@@ -1766,7 +1767,8 @@ bool server_prompt_cache::disk_write(const server_prompt_cache_state & state) {
     const int64_t t_start = ggml_time_us();
 
     const std::string path = disk_name_prefix() + std::to_string(disk_seq++);
-    const llama_tokens & tokens = state.prompt.tokens.get_tokens();
+    // no media here (checked above), so the text tokens are the full token list
+    const llama_tokens tokens = state.prompt.tokens.get_text_tokens();
 
     // write to a temporary name first, so other servers never index a partial file
     const std::string path_tmp = path + ".tmp";
@@ -1969,7 +1971,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     }
 
     for (auto it = disk_states.begin(); it != disk_states.end(); ++it) {
-        if (tokens_common_prefix(it->tokens, prompt.tokens.get_tokens()) == prompt.tokens.size()) {
+        if (tokens_common_prefix(it->tokens, prompt.tokens) == prompt.tokens.size()) {
             // another server may have removed the file
             std::error_code ec;
             if (!std::filesystem::exists(it->path, ec)) {
@@ -2013,7 +2015,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     for (auto it = disk_states.begin(); it != disk_states.end();) {
         auto it_next = std::next(it);
 
-        if (tokens_common_prefix(it->tokens, prompt.tokens.get_tokens()) == it->tokens.size()) {
+        if (tokens_common_prefix(it->tokens, prompt.tokens) == it->tokens.size()) {
             SRV_TRC(" - removing obsolete disk cached prompt with length %zu\n", it->tokens.size());
 
             disk_remove(it);
@@ -2100,7 +2102,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     auto it_disk_best = disk_states.end();
 
     for (auto it = disk_states.begin(); it != disk_states.end(); ++it) {
-        const size_t lcp_cur = tokens_common_prefix(it->tokens, tokens_new.get_tokens());
+        const size_t lcp_cur = tokens_common_prefix(it->tokens, tokens_new);
 
         const float f_keep_cur = float(lcp_cur) / it->tokens.size();
         const float f_sim_cur  = float(lcp_cur) / tokens_new.size();
