@@ -169,6 +169,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `--cache-disk N` | write prompt cache entries evicted from RAM (and all of them on exit) to --slot-save-path, max size in MiB (default: 0, -1 - no limit, 0 - disable)<br/>(env: LLAMA_ARG_CACHE_DISK) |
+| `--cache-disk-shared, --no-cache-disk-shared` | apply the --cache-disk size limit to the entries of all servers using the same --slot-save-path: remove the oldest entries of any model, and keep entries saved with other model files or settings (default: disabled)<br/>(env: LLAMA_ARG_CACHE_DISK_SHARED) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |

@@ -1688,6 +1688,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_DISK").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--cache-disk-shared"},
+        {"--no-cache-disk-shared"},
+        "apply the --cache-disk size limit to the entries of all servers using the same --slot-save-path: remove the oldest entries of any model, and keep entries saved with other model files or settings (default: disabled)",
+        [](common_params & params, bool value) {
+            params.cache_disk_shared = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_DISK_SHARED").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",
