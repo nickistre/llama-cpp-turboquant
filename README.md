@@ -37,6 +37,13 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
    context checkpoints to `--slot-save-path` on process exit and restores them on the next
    load of the same model, so a router-mode model hot-swap (or host restart) doesn't force a
    full prompt re-prefill. Skipped for slots holding media, same as the existing `/slots` guard.
+3. **Prompt cache disk tier** (`--cache-disk N`, MiB, `-1` = no limit) - entries evicted from
+   the `--cache-ram` prompt cache are written to `--slot-save-path` instead of dropped, and the
+   whole RAM cache plus every slot is written there on exit or sleep. A returning conversation
+   restores from disk instead of re-prefilling, so many concurrent sessions on one `--parallel 1`
+   model no longer evict each other. The disk index is rebuilt on startup; when enabled it
+   replaces the per-slot auto-save/restore above. Entries holding media are not written. Writes
+   happen only on eviction and exit, so a crash loses the entries still in RAM.
 
 ## Quick start
 
