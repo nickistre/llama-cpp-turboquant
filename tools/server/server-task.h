@@ -635,6 +635,13 @@ struct server_prompt_cache_state {
     }
 };
 
+// prompt cache entry spilled to disk; only the token list stays in memory
+struct server_prompt_cache_disk_state {
+    llama_tokens tokens;
+    std::string  path;
+    size_t       size;
+};
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
@@ -649,16 +656,50 @@ struct server_prompt_cache {
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
 
+    // disk tier: entries evicted from RAM are written here instead of dropped
+    std::list<server_prompt_cache_disk_state> disk_states;
+
+    // file name prefix, empty = disk tier disabled
+    std::string disk_prefix;
+
+    // identifies the model files and settings, entries with another key are removed
+    std::string disk_key;
+
+    // in bytes, 0 = no limit
+    size_t disk_limit_size = 0;
+
+    uint64_t disk_seq = 0;
+
     size_t size() const;
 
     size_t n_tokens() const;
+
+    size_t disk_size() const;
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
+
+    // scan prefix + ".pcache-*" files and index the ones with a matching key
+    void disk_init(const std::string & prefix, const std::string & key, int32_t limit_size_mib, bool has_drft);
+
+    // write all RAM entries to disk (on shutdown)
+    void disk_flush();
+
+private:
+    // remove the oldest RAM entry, writing it to disk if the disk tier is enabled
+    void evict_oldest();
+
+    bool disk_write(const server_prompt_cache_state & state);
+
+    void disk_remove(std::list<server_prompt_cache_disk_state>::iterator it);
 };
+
+// context checkpoints serialization, shared by the slot save sidecar and the prompt cache disk tier
+bool server_checkpoints_write(FILE * f, const std::list<common_prompt_checkpoint> & checkpoints);
+bool server_checkpoints_read (FILE * f,       std::list<common_prompt_checkpoint> & checkpoints);
 
 // used exclusively by router mode
 struct server_task_result_router : server_task_result {

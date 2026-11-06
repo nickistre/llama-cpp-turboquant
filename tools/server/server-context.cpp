@@ -1212,6 +1212,9 @@ private:
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
             SRV_INF("%s", "server is entering sleeping state\n");
+            if (prompt_cache_on_disk()) {
+                prompt_cache_flush();
+            }
             destroy();
         } else {
             SRV_INF("%s", "server is exiting sleeping state\n");
@@ -1723,6 +1726,14 @@ private:
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(cache_ram_mib, n_ctx);
+
+            if (params_base.cache_disk_mib != 0) {
+                if (params_base.slot_save_path.empty()) {
+                    SRV_WRN("%s", "--cache-disk requires --slot-save-path, disabling\n");
+                } else {
+                    prompt_cache->disk_init(auto_slot_state_path(), prompt_cache_disk_key(), params_base.cache_disk_mib, ctx_dft != nullptr);
+                }
+            }
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
@@ -2690,34 +2701,9 @@ private:
             return false;
         }
 
-        bool ok = true;
+        const bool ok = server_checkpoints_write(f, checkpoints);
 
-        const uint32_t magic   = 0x4C434B50; // "PKCL"
-        const uint32_t version = 1;
-        const uint32_t count   = (uint32_t) checkpoints.size();
-
-        ok = ok && fwrite(&magic,   sizeof(magic),   1, f) == 1;
-        ok = ok && fwrite(&version, sizeof(version), 1, f) == 1;
-        ok = ok && fwrite(&count,   sizeof(count),   1, f) == 1;
-
-        for (const auto & cur : checkpoints) {
-            const int64_t  n_tokens = cur.n_tokens;
-            const int32_t  pos_min  = cur.pos_min;
-            const int32_t  pos_max  = cur.pos_max;
-            const uint64_t n_tgt    = cur.data_tgt.size();
-            const uint64_t n_dft    = cur.data_dft.size();
-
-            ok = ok && fwrite(&n_tokens, sizeof(n_tokens), 1, f) == 1;
-            ok = ok && fwrite(&pos_min,  sizeof(pos_min),  1, f) == 1;
-            ok = ok && fwrite(&pos_max,  sizeof(pos_max),  1, f) == 1;
-            ok = ok && fwrite(&n_tgt,    sizeof(n_tgt),    1, f) == 1;
-            ok = ok && fwrite(&n_dft,    sizeof(n_dft),    1, f) == 1;
-            ok = ok && (n_tgt == 0 || fwrite(cur.data_tgt.data(), 1, n_tgt, f) == n_tgt);
-            ok = ok && (n_dft == 0 || fwrite(cur.data_dft.data(), 1, n_dft, f) == n_dft);
-        }
-
-        fclose(f);
-        return ok;
+        return (fclose(f) == 0) && ok;
     }
 
     // default 8 GiB cap on the .ckpt sidecar read at restore time; a large
@@ -2761,47 +2747,11 @@ private:
             return false;
         }
 
-        uint32_t magic = 0, version = 0, count = 0;
-
-        bool ok = fread(&magic,   sizeof(magic),   1, f) == 1 &&
-                  fread(&version, sizeof(version), 1, f) == 1 &&
-                  fread(&count,   sizeof(count),   1, f) == 1 &&
-                  magic == 0x4C434B50 && version == 1 && count <= 1024;
-
-        std::list<common_prompt_checkpoint> loaded;
-
-        for (uint32_t i = 0; ok && i < count; ++i) {
-            auto & cur = loaded.emplace_back();
-
-            uint64_t n_tgt = 0;
-            uint64_t n_dft = 0;
-
-            ok = ok && fread(&cur.n_tokens, sizeof(cur.n_tokens), 1, f) == 1;
-            ok = ok && fread(&cur.pos_min,  sizeof(cur.pos_min),  1, f) == 1;
-            ok = ok && fread(&cur.pos_max,  sizeof(cur.pos_max),  1, f) == 1;
-            ok = ok && fread(&n_tgt,        sizeof(n_tgt),        1, f) == 1;
-            ok = ok && fread(&n_dft,        sizeof(n_dft),        1, f) == 1;
-
-            // sanity: refuse absurd blob sizes (16 GiB per blob)
-            ok = ok && n_tgt <= (1ull << 34) && n_dft <= (1ull << 34);
-
-            if (ok) {
-                cur.data_tgt.resize(n_tgt);
-                cur.data_dft.resize(n_dft);
-                ok = ok && (n_tgt == 0 || fread(cur.data_tgt.data(), 1, n_tgt, f) == n_tgt);
-                ok = ok && (n_dft == 0 || fread(cur.data_dft.data(), 1, n_dft, f) == n_dft);
-            }
-        }
+        const bool ok = server_checkpoints_read(f, checkpoints);
 
         fclose(f);
 
-        if (!ok) {
-            return false;
-        }
-
-        checkpoints = std::move(loaded);
-
-        return true;
+        return ok;
     }
 
     // auto-save/restore slot state across process restarts (e.g. llama-swap
@@ -2829,8 +2779,60 @@ private:
         return params_base.slot_save_path + model_stem + (mctx ? "-mtmd" : "");
     }
 
+    // the file name holds only the model stem, so a replaced GGUF with the same name must not match
+    std::string prompt_cache_disk_key() const {
+        std::string key;
+
+        const auto add_file = [&key](const char * name, const std::string & path) {
+            if (path.empty()) {
+                return;
+            }
+            std::error_code ec;
+            const auto size  = std::filesystem::file_size(path, ec);
+            const auto mtime = std::filesystem::last_write_time(path, ec);
+            key += string_format("%s=%s|size=%llu|mtime=%lld\n", name, path.c_str(),
+                    (unsigned long long) size, ec ? 0LL : (long long) mtime.time_since_epoch().count());
+        };
+
+        add_file("model",  params_base.model.path);
+        add_file("draft",  params_base.speculative.draft.mparams.path);
+        add_file("mmproj", params_base.mmproj.path);
+        for (const auto & lora : params_base.lora_adapters) {
+            add_file("lora", lora.path);
+        }
+
+        key += string_format("n_ctx=%u|type_k=%s|type_v=%s|swa_full=%d\n", llama_n_ctx(ctx_tgt),
+                ggml_type_name(params_base.cache_type_k), ggml_type_name(params_base.cache_type_v), params_base.swa_full);
+
+        return key;
+    }
+
+    bool prompt_cache_on_disk() const {
+        return prompt_cache && !prompt_cache->disk_prefix.empty();
+    }
+
+    // move the slots and all RAM cache entries to the disk tier
+    void prompt_cache_flush() {
+        for (auto & slot : slots) {
+            if (slot.prompt.tokens.has_media()) {
+                SRV_INF("prompt cache: skipping slot %d (holds image/audio tokens)\n", slot.id);
+                continue;
+            }
+
+            slot.prompt_save(*prompt_cache);
+        }
+
+        prompt_cache->disk_flush();
+    }
+
     void auto_save_slots() {
         if (params_base.slot_save_path.empty()) {
+            return;
+        }
+
+        // with the disk tier the prompt cache restores the slots on demand
+        if (prompt_cache_on_disk()) {
+            prompt_cache_flush();
             return;
         }
 
@@ -2869,7 +2871,7 @@ private:
     // is text-only by construction (has_media() == false immediately
     // after), so it's always safe to restore into a multimodal model's slot.
     void auto_restore_slots() {
-        if (params_base.slot_save_path.empty()) {
+        if (params_base.slot_save_path.empty() || prompt_cache_on_disk()) {
             return;
         }
 
