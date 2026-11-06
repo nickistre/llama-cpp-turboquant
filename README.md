@@ -23,10 +23,11 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
 `llamacpp-amd`):
 
 1. **Base: TurboQuant** - [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)
-   (`feature/turboquant-kv-cache`). Tracks upstream closely and adds the turbo3/turbo4 KV-cache
-   quantization types, Vulkan/ROCm support, multimodal `llama-server`, and (as of the
-   2026-08-21 rebase) an opt-in `--moe-cache` expert cache for CPU-offloaded MoE models —
-   see `docs/backend/MOE-CACHE.md`.
+   (`feature/turboquant-kv-cache`, rebased onto `643956891` on 2026-11-05). Adds the
+   turbo2-6 KV-cache quantization types, Vulkan/ROCm support, multimodal `llama-server`, an
+   opt-in `--moe-cache` expert cache for CPU-offloaded MoE models (see
+   `docs/backend/MOE-CACHE.md`), and opt-in block KV streaming (`--kv-stream-arena-mib`) to
+   bound VRAM at long context.
 2. **Auto-save/restore slot state** (`server: auto-save/restore slot state on process
    exit/start`) - adapted from the auto-save/restore commit in
    [European-tech's PR #20822](https://github.com/ggml-org/llama.cpp/pull/20822) (open,
@@ -35,7 +36,7 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
    TurboQuant already has equivalent checkpoint persistence. Saves each slot's KV state +
    context checkpoints to `--slot-save-path` on process exit and restores them on the next
    load of the same model, so a router-mode model hot-swap (or host restart) doesn't force a
-   full prompt re-prefill. Skipped for multimodal models, same as the existing `/slots` guard.
+   full prompt re-prefill. Skipped for slots holding media, same as the existing `/slots` guard.
 
 ## Quick start
 
