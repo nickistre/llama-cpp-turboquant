@@ -43,7 +43,10 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
    restores from disk instead of re-prefilling, so many concurrent sessions on one `--parallel 1`
    model no longer evict each other. The disk index is rebuilt on startup; when enabled it
    replaces the per-slot auto-save/restore above. Entries holding media are not written. Writes
-   happen only on eviction and exit, so a crash loses the entries still in RAM.
+   happen only on eviction and exit, so a crash loses the entries still in RAM. With
+   `--cache-disk-shared`, the size limit covers every server using the same `--slot-save-path`
+   (e.g. all llama-swap models): the oldest entries of any model are removed first, and entries
+   saved with other model files or settings are kept instead of deleted.
 
 ## Quick start
 

@@ -644,6 +644,7 @@ struct common_params {
     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_disk_mib      = 0;     // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    bool    cache_disk_shared   = false; // cache_disk_mib covers all servers using the same slot_save_path
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT

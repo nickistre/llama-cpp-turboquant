@@ -665,6 +665,9 @@ struct server_prompt_cache {
     // identifies the model files and settings, entries with another key are removed
     std::string disk_key;
 
+    // the size limit covers the entries of all servers in the directory, and entries with another key are kept
+    bool disk_shared = false;
+
     // in bytes, 0 = no limit
     size_t disk_limit_size = 0;
 
@@ -683,7 +686,7 @@ struct server_prompt_cache {
     void update();
 
     // scan prefix + ".pcache-*" files and index the ones with a matching key
-    void disk_init(const std::string & prefix, const std::string & key, int32_t limit_size_mib, bool has_drft);
+    void disk_init(const std::string & prefix, const std::string & key, int32_t limit_size_mib, bool shared, bool has_drft);
 
     // write all RAM entries to disk (on shutdown)
     void disk_flush();
@@ -693,6 +696,12 @@ private:
     void evict_oldest();
 
     bool disk_write(const server_prompt_cache_state & state);
+
+    // remove the oldest entries until size_new fits in the limit
+    void disk_make_room(size_t size_new);
+
+    // file name prefix of the entries with the current key
+    std::string disk_name_prefix() const;
 
     void disk_remove(std::list<server_prompt_cache_disk_state>::iterator it);
 };

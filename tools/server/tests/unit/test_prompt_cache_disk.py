@@ -102,3 +102,25 @@ def test_prompt_cache_disk_key_mismatch():
     server.start()
     assert len(disk_entries()) == 0
     assert complete(PROMPT_A) == n_a
+
+
+def test_prompt_cache_disk_shared():
+    global server
+    # 1 MiB holds only one of these entries
+    server.cache_disk = 1
+    server.cache_disk_shared = True
+    server.n_ctx = 2048
+    server.start()
+    complete((PROMPT_A + " ") * 12)
+    server.stop()
+    files_a = disk_entries()
+    assert len(files_a) == 1
+
+    # a server with other settings keeps the entry, then removes it to make room in the shared limit
+    server.n_ctx = 4096
+    server.start()
+    assert disk_entries() == files_a
+    complete((PROMPT_B + " ") * 12)
+    server.stop()
+    files = disk_entries()
+    assert len(files) == 1 and files != files_a

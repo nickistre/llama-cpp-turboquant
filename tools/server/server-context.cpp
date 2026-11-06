@@ -1731,7 +1731,7 @@ private:
                 if (params_base.slot_save_path.empty()) {
                     SRV_WRN("%s", "--cache-disk requires --slot-save-path, disabling\n");
                 } else {
-                    prompt_cache->disk_init(auto_slot_state_path(), prompt_cache_disk_key(), params_base.cache_disk_mib, ctx_dft != nullptr);
+                    prompt_cache->disk_init(auto_slot_state_path(), prompt_cache_disk_key(), params_base.cache_disk_mib, params_base.cache_disk_shared, ctx_dft != nullptr);
                 }
             }
         } else {
