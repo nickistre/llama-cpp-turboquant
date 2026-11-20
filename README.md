@@ -60,8 +60,9 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
    least output) is saved to the `--cache-ram` prompt cache and deferred, the others keep
    decoding, and it resumes from the cache when there is room. Its sampler (grammar, reasoning
    budget, RNG) moves with it, and the client sees one uninterrupted response with normal token
-   counts and timings. Parked sessions resume ahead of new requests, on any free slot.
-   `--decode-overflow-reserve N` holds back sessions that would leave N or fewer cells free.
+   counts and timings. Parked sessions resume ahead of new requests, on any free slot. On a
+   multimodal model, text-only sessions park like any other; a session holding image or audio
+   tokens is never parked. `--decode-overflow-reserve N` holds back sessions that would leave N or fewer cells free.
    Requires `--kv-unified` and `--cache-ram`. It turns itself off with a warning for the KV-stream
    arena and for MTP, EAGLE3, DFlash or DSpark drafting. The same commit makes a prompt-cache
    restore that fails for lack of cells clear the idle slots and retry, or wait for a busy slot

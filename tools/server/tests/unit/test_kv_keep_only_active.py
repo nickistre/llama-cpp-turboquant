@@ -471,3 +471,72 @@ def test_defer_restore_until_cells_free():
     assert "prompt restore failed, deferring task until a slot is released" in content
     assert res.body["timings"]["cache_n"] >= len(prompt_a)
     assert res.body["timings"]["prompt_n"] <= 2
+
+
+IMG_URL_CAT = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png"
+
+
+# the same pool setup as the fixture, on a multimodal model (an mmproj is loaded)
+def multimodal_server():
+    global server
+    os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
+    log_path = server.log_path
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 2
+    server.n_predict = 4
+    server.n_batch = 512
+    server.temperature = 0.0
+    server.server_slots = True
+    server.cache_ram = 100
+    server.kv_unified = True
+    server.debug = True
+    server.log_path = log_path
+    server.decode_overflow_policy = "newest"
+    server.n_ctx = 1280
+    return server
+
+
+# parking is gated on the slot's content: text-only sessions on a multimodal model park and resume
+def test_decode_overflow_park_text_only_on_multimodal():
+    multimodal_server().start()
+    log = LogReader(server.log_path)
+
+    box_a, box_b = run_two_sessions()
+
+    content = log.drain()
+    assert "__TEST_TAG_DECODE_OVERFLOW_PARK__" in content
+    assert "__TEST_TAG_DECODE_OVERFLOW_RESUME__" in content
+    assert "Context size has been exceeded." not in content
+
+    assert_clean_stream(box_a, 1000)
+    assert_clean_stream(box_b, 600)
+
+
+# a session holding an image is never parked: with "newest", the newer image session would be the victim,
+# so the older text-only session is parked instead
+def test_decode_overflow_never_parks_image_session():
+    import base64
+    import requests
+
+    multimodal_server().start()
+    log = LogReader(server.log_path)
+
+    img = base64.b64encode(requests.get(IMG_URL_CAT).content).decode("utf-8")
+
+    started = threading.Event()
+    ta, box_a = stream_in_thread(token_ids("knight", 220), 1000, started)
+    assert started.wait(30)
+    await_decode_progress(box_a, 40)
+    tb, box_b = stream_in_thread({
+        "prompt_string": "What is this: <__media__>\n",
+        "multimodal_data": [img],
+    }, 600)
+    ta.join(120)
+    tb.join(120)
+
+    content = log.drain()
+    assert "__TEST_TAG_DECODE_OVERFLOW_PARK__" in content
+    assert "Context size has been exceeded." not in content
+
+    assert_clean_stream(box_a, 1000)
+    assert_clean_stream(box_b, 600)

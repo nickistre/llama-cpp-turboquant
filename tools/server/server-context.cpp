@@ -4433,7 +4433,9 @@ private:
             return false;
         }
 
-        if (slot.task->is_child() || slot.prompt.tokens.has_mtmd || slot.state_save_unsupported) {
+        // gate on the slot's content, not on whether an mmproj is loaded: the prompt cache cannot hold
+        // image/audio chunks, but a text-only session on a multimodal model parks like any other
+        if (slot.task->is_child() || slot.prompt.tokens.has_media() || slot.state_save_unsupported) {
             return false;
         }
 
@@ -4542,10 +4544,10 @@ private:
             return false;
         }
 
+        // indexed reads instead of get_tokens(), which asserts on a multimodal model; the tail is text tokens
         llama_tokens tail;
-        {
-            const auto & tokens = slot.prompt.tokens.get_tokens();
-            tail.assign(tokens.end() - n_tail, tokens.end());
+        for (size_t i = extent; i < slot.prompt.tokens.size(); i++) {
+            tail.push_back(slot.prompt.tokens[i]);
         }
 
         slot.prompt.tokens.keep_first(extent);
