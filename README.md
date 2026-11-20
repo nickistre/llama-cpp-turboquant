@@ -47,6 +47,21 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
    `--cache-disk-shared`, the size limit covers every server using the same `--slot-save-path`
    (e.g. all llama-swap models): the oldest entries of any model are removed first, and entries
    saved with other model files or settings are kept instead of deleted.
+4. **Decode-overflow parking** (`--decode-overflow-policy off|newest|largest|least-output`,
+   default `off`) - ported from the sample commits in
+   [ggml-org/llama.cpp discussion #31976](https://github.com/ggml-org/llama.cpp/discussions/31976)
+   (proposal only, nothing merged upstream). With `--kv-unified`, a decode that runs out of KV
+   cells normally fails every active session with "Context size has been exceeded". With the
+   policy set, one session (the newest, the one with the largest KV extent, or the one with the
+   least output) is saved to the `--cache-ram` prompt cache and deferred, the others keep
+   decoding, and it resumes from the cache when there is room. Its sampler (grammar, reasoning
+   budget, RNG) moves with it, and the client sees one uninterrupted response with normal token
+   counts and timings. Parked sessions resume ahead of new requests, on any free slot.
+   `--decode-overflow-reserve N` holds back sessions that would leave N or fewer cells free.
+   Requires `--kv-unified` and `--cache-ram`. It turns itself off with a warning for the KV-stream
+   arena and for MTP, EAGLE3, DFlash or DSpark drafting. The same commit makes a prompt-cache
+   restore that fails for lack of cells clear the idle slots and retry, or wait for a busy slot
+   to finish, instead of re-prefilling the whole prompt. Tested on CPU only so far.
 
 ## Quick start
 
