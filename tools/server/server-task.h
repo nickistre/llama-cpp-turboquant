@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "llama.h"
+#include "sampling.h"
 
 #include <string>
 #include <unordered_set>
@@ -133,6 +134,27 @@ struct task_result_state {
         bool filter_tool_calls = false);
 };
 
+struct completion_token_output {
+    llama_token tok;
+    float prob;
+    std::string text_to_send;
+    struct prob_info {
+        llama_token tok;
+        std::string txt;
+        float prob;
+    };
+    std::vector<prob_info> probs;
+
+    json to_json(bool post_sampling_probs) const;
+
+    static json probs_vector_to_json(const std::vector<completion_token_output> & probs, bool post_sampling_probs);
+
+    static float logarithm(float x);
+
+    static std::vector<unsigned char> str_to_bytes(const std::string & str);
+
+};
+
 struct server_task {
     int id = -1; // to be filled by server_queue
 
@@ -152,6 +174,38 @@ struct server_task {
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
     server_tokens tokens;
+
+    // a session parked by the decode-overflow policy: its output and stats so far, restored on resume
+    // tokens then holds the client prompt plus the generated tokens
+    struct park_state {
+        bool parked = false;
+
+        int32_t n_prompt_tokens = 0; // the prompt as the client sent it
+
+        std::string  generated_text;
+        llama_tokens generated_tokens;
+        std::vector<completion_token_output> generated_token_probs;
+
+        size_t n_sent_text  = 0;
+        size_t last_nl_pos  = 0;
+        bool   has_new_line = false;
+        bool   truncated    = false;
+
+        int32_t n_decoded                 = 0;
+        int32_t n_prompt_tokens_cache     = 0;
+        int32_t n_prompt_tokens_processed = 0;
+        double  t_prompt_processing       = 0.0;
+        int64_t t_start_generation        = 0;
+
+        int32_t n_draft_total       = 0;
+        int32_t n_draft_accepted    = 0;
+        int32_t n_draft_verif_steps = 0;
+        std::vector<int32_t> n_accepted_per_pos;
+    };
+    park_state park;
+
+    // the sampler of a parked session, so the grammar, history and RNG continue where they stopped
+    common_sampler_ptr park_sampler;
 
     // only used by CLI, this allow tokenizing CLI inputs on server side
     // we need this because mtmd_context and vocab are not accessible outside of server_context
@@ -315,27 +369,6 @@ struct server_task_result {
 
 // using shared_ptr for polymorphism of server_task_result
 using server_task_result_ptr = std::unique_ptr<server_task_result>;
-
-struct completion_token_output {
-    llama_token tok;
-    float prob;
-    std::string text_to_send;
-    struct prob_info {
-        llama_token tok;
-        std::string txt;
-        float prob;
-    };
-    std::vector<prob_info> probs;
-
-    json to_json(bool post_sampling_probs) const;
-
-    static json probs_vector_to_json(const std::vector<completion_token_output> & probs, bool post_sampling_probs);
-
-    static float logarithm(float x);
-
-    static std::vector<unsigned char> str_to_bytes(const std::string & str);
-
-};
 
 struct server_task_result_cmpl_final : server_task_result {
     std::string content;
@@ -679,7 +712,8 @@ struct server_prompt_cache {
 
     size_t disk_size() const;
 
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    // already_cached is set when an entry holds exactly this prompt, so the caller may drop its copy
+    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft, bool * already_cached = nullptr);
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 

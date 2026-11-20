@@ -3,6 +3,7 @@
 
 #include "log.h"
 
+#include <algorithm>
 #include <chrono>
 
 #define QUE_INF(fmt, ...) LOG_INF("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -63,7 +64,15 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
 void server_queue::defer(server_task && task) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     QUE_DBG("defer task, id = %d\n", task.id);
-    queue_tasks_deferred.push_back(std::move(task));
+    if (task.park.parked) {
+        // parked sessions wait ahead of the other deferred tasks, oldest first
+        auto it = std::find_if(queue_tasks_deferred.begin(), queue_tasks_deferred.end(), [](const server_task & t) {
+            return !t.park.parked;
+        });
+        queue_tasks_deferred.insert(it, std::move(task));
+    } else {
+        queue_tasks_deferred.push_back(std::move(task));
+    }
     time_last_task = ggml_time_ms();
     condition_tasks.notify_one();
 }
@@ -77,9 +86,9 @@ int server_queue::get_new_id() {
 void server_queue::pop_deferred_task(int id_slot) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     if (!queue_tasks_deferred.empty()) {
-        // try to find a task that uses the specified slot
+        // try to find a task that uses the specified slot, a parked session goes first
         bool found = false;
-        for (auto it = queue_tasks_deferred.begin(); it != queue_tasks_deferred.end(); ++it) {
+        for (auto it = queue_tasks_deferred.begin(); it != queue_tasks_deferred.end() && !queue_tasks_deferred.front().park.parked; ++it) {
             if (it->id_slot == id_slot) {
                 QUE_DBG("pop deferred task (use slot %d), id_task = %d\n", id_slot, it->id);
                 queue_tasks.emplace_front(std::move(*it));

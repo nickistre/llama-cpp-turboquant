@@ -1959,13 +1959,21 @@ void server_prompt_cache::disk_flush() {
     }
 }
 
-server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
+server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft, bool * already_cached) {
+    if (already_cached) {
+        *already_cached = false;
+    }
+
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);
 
         if (cur_lcp_len == (int) prompt.tokens.size()) {
             SRV_TRC("%s", " - prompt is already in the cache, skipping\n");
+            // a longer entry is not the same state
+            if (already_cached) {
+                *already_cached = it->prompt.tokens.size() == prompt.tokens.size();
+            }
             return nullptr;
         }
     }
@@ -1980,6 +1988,9 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             }
 
             SRV_TRC("%s", " - prompt is already in the disk cache, skipping\n");
+            if (already_cached) {
+                *already_cached = it->tokens.size() == prompt.tokens.size();
+            }
             return nullptr;
         }
     }
@@ -2148,10 +2159,9 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             fclose(f);
         }
 
-        // the entry moves into the slot, or it is broken
-        disk_remove(it_disk_best);
-
         if (!ok) {
+            disk_remove(it_disk_best);
+
             // with a shared disk another server may have removed the file, so try the RAM entry instead
             SRV_WRN("failed to read prompt cache entry %s\n", path.c_str());
             if (it_best == states.end()) {
@@ -2159,6 +2169,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             }
         } else {
             // on failure the context drops the sequence, so drop the slot tokens too
+            // the file is kept, so the caller can retry once it has freed KV cells
             if (llama_state_seq_set_data_ext(ctx_tgt, data_main.data(), data_main.size(), id_slot, 0) != data_main.size()) {
                 SRV_ERR("failed to restore state from %s\n", path.c_str());
                 prompt.clear();
@@ -2171,6 +2182,9 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
                 prompt.clear();
                 return false;
             }
+
+            // the entry moves into the slot
+            disk_remove(it_disk_best);
 
             prompt = server_prompt {
                 server_tokens(tokens, tokens_new.has_mtmd),
@@ -2196,9 +2210,6 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                 return false;
             }
-
-            data.clear();
-            data.shrink_to_fit();
         }
 
         {
@@ -2214,12 +2225,10 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                     return false;
                 }
-
-                data.clear();
-                data.shrink_to_fit();
             }
         }
 
+        // the buffers are kept until here, so a failed restore can be retried
         prompt = std::move(it_best->prompt);
 
         states.erase(it_best);

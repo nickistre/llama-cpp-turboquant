@@ -112,6 +112,9 @@ class ServerProcess:
     cache_disk: int | None = None
     cache_disk_shared: bool = False
     no_cache_idle_slots: bool = False
+    override_kv: str | None = None
+    decode_overflow_policy: str | None = None
+    decode_overflow_reserve: int | None = None
     log_path: str | None = None
     ui_mcp_proxy: bool = False
     backend_sampling: bool = False
@@ -269,6 +272,12 @@ class ServerProcess:
             server_args.append("--cache-disk-shared")
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
+        if self.override_kv is not None:
+            server_args.extend(["--override-kv", self.override_kv])
+        if self.decode_overflow_policy is not None:
+            server_args.extend(["--decode-overflow-policy", self.decode_overflow_policy])
+        if self.decode_overflow_reserve is not None:
+            server_args.extend(["--decode-overflow-reserve", self.decode_overflow_reserve])
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
         if self.server_tools:

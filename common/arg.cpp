@@ -1712,6 +1712,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_IDLE_SLOTS").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--decode-overflow-policy"}, "POLICY",
+        "when a decode step runs out of unified KV cache cells, park one session in the prompt cache and continue the others instead of failing all of them; choices: off, newest, largest, least-output (default: off, requires kv-unified and cache-ram)",
+        [](common_params & params, const std::string & value) {
+            if (value == "off") {
+                params.decode_overflow_policy = COMMON_DECODE_OVERFLOW_POLICY_OFF;
+            } else if (value == "newest") {
+                params.decode_overflow_policy = COMMON_DECODE_OVERFLOW_POLICY_NEWEST;
+            } else if (value == "largest") {
+                params.decode_overflow_policy = COMMON_DECODE_OVERFLOW_POLICY_LARGEST;
+            } else if (value == "least-output") {
+                params.decode_overflow_policy = COMMON_DECODE_OVERFLOW_POLICY_LEAST_OUTPUT;
+            } else {
+                throw std::invalid_argument("unknown value for --decode-overflow-policy: " + value);
+            }
+        }
+    ).set_env("LLAMA_ARG_DECODE_OVERFLOW_POLICY").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--decode-overflow-reserve"}, "N",
+        "with --decode-overflow-policy, start a session only when more than N cells of the unified KV cache stay free after its prompt (default: -1 = 1 cell, for resumed parked sessions only)",
+        [](common_params & params, int value) {
+            if (value < -1) {
+                throw std::invalid_argument("--decode-overflow-reserve must be -1 or non-negative");
+            }
+            params.decode_overflow_reserve = value;
+        }
+    ).set_env("LLAMA_ARG_DECODE_OVERFLOW_RESERVE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
         string_format("whether to use context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),

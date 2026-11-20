@@ -172,6 +172,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--cache-disk-shared, --no-cache-disk-shared` | apply the --cache-disk size limit to the entries of all servers using the same --slot-save-path: remove the oldest entries of any model, and keep entries saved with other model files or settings (default: disabled)<br/>(env: LLAMA_ARG_CACHE_DISK_SHARED) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
+| `--decode-overflow-policy POLICY` | when a decode step runs out of unified KV cache cells, park one session in the prompt cache and continue the others instead of failing all of them; choices: off, newest, largest, least-output (default: off, requires kv-unified and cache-ram)<br/>(env: LLAMA_ARG_DECODE_OVERFLOW_POLICY) |
+| `--decode-overflow-reserve N` | with --decode-overflow-policy, start a session only when more than N cells of the unified KV cache stay free after its prompt (default: -1 = 1 cell, for resumed parked sessions only)<br/>(env: LLAMA_ARG_DECODE_OVERFLOW_RESERVE) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
 | `-r, --reverse-prompt PROMPT` | halt generation at PROMPT, return control in interactive mode |
 | `-sp, --special` | special tokens output enabled (default: false) |
