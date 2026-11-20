@@ -23,7 +23,7 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
 `llamacpp-amd`):
 
 1. **Base: TurboQuant** - [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant)
-   (`feature/turboquant-kv-cache`, rebased onto `643956891` on 2026-11-05). Adds the
+   (`feature/turboquant-kv-cache`, rebased onto `4185b90a0` on 2026-11-16). Adds the
    turbo2-6 KV-cache quantization types, Vulkan/ROCm support, multimodal `llama-server`, an
    opt-in `--moe-cache` expert cache for CPU-offloaded MoE models (see
    `docs/backend/MOE-CACHE.md`), and opt-in block KV streaming (`--kv-stream-arena-mib`) to
@@ -47,7 +47,11 @@ to serve as the standard build for internal deployments (`home-kubernetes/llamac
    `--cache-disk-shared`, the size limit covers every server using the same `--slot-save-path`
    (e.g. all llama-swap models): the oldest entries of any model are removed first, and entries
    saved with other model files or settings are kept instead of deleted.
-4. **Decode-overflow parking** (`--decode-overflow-policy off|newest|largest|least-output`,
+4. **Upstream CUDA MMQ fixes** - cherry-picked from upstream: "fix MMQ memory fault if
+   n_expert >> n_ubatch" ([#29941](https://github.com/ggml-org/llama.cpp/pull/29941)) and "fix MMQ
+   out-of-bounds reads" ([#29953](https://github.com/ggml-org/llama.cpp/pull/29953)). #29953 was
+   ported by hand, because this branch predates upstream's `prec_src1` plumbing.
+5. **Decode-overflow parking** (`--decode-overflow-policy off|newest|largest|least-output`,
    default `off`) - ported from the sample commits in
    [ggml-org/llama.cpp discussion #31976](https://github.com/ggml-org/llama.cpp/discussions/31976)
    (proposal only, nothing merged upstream). With `--kv-unified`, a decode that runs out of KV
